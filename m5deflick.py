@@ -676,6 +676,7 @@ def run(args: argparse.Namespace) -> int:
             calibration = collect_calibration(source, args.calibration)
 
         detector = MotionDetector(args.min_motion_area, args.bg_alpha)
+        color_tracker = ColorZoneTracker(args)
         tracker = EventTracker(args, output)
 
         cv2.namedWindow("M5Deflick board", cv2.WINDOW_NORMAL)
@@ -691,10 +692,11 @@ def run(args: argparse.Namespace) -> int:
             matrix = calibration.matrix
             warped = cv2.warpPerspective(frame, matrix, (BOARD_SIZE, BOARD_SIZE))
             allow_bg_update = not tracker.active
+            zones = color_tracker.update(warped, allow_bg_update)
             centroid, _area, mask = detector.detect(warped, allow_bg_update)
-            label = tracker.update(centroid, _area, time.monotonic())
+            label = tracker.update(centroid, _area, time.monotonic(), zones)
 
-            board_display = draw_overlay(warped, centroid, label)
+            board_display = draw_overlay(warped, centroid, label, zones)
             camera_display = draw_camera_overlay(frame, calibration.points)
             mask_display = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
             combined = np.hstack([cv2.resize(board_display, (512, 512)), cv2.resize(mask_display, (512, 512))])
@@ -708,6 +710,7 @@ def run(args: argparse.Namespace) -> int:
             if key == ord("r"):
                 calibration = collect_calibration(source, args.calibration)
                 detector.reset()
+                color_tracker.reset()
             if key == ord("b"):
                 detector.reset()
     finally:
