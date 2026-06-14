@@ -175,27 +175,30 @@ class MjpegSource:
         self.iterator = None
 
 
+class KeybdInput(ctypes.Structure):
+    _fields_ = [
+        ("wVk", ctypes.c_ushort),
+        ("wScan", ctypes.c_ushort),
+        ("dwFlags", ctypes.c_ulong),
+        ("time", ctypes.c_ulong),
+        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+    ]
+
+
+class InputUnion(ctypes.Union):
+    _fields_ = [("ki", KeybdInput)]
+
+
+class InputEvent(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_ulong), ("union", InputUnion)]
+
+
 class WindowsInput:
     INPUT_KEYBOARD = 1
     KEYEVENTF_KEYUP = 0x0002
     KEYEVENTF_UNICODE = 0x0004
     VK_BACK = 0x08
     VK_ESCAPE = 0x1B
-
-    class KEYBDINPUT(ctypes.Structure):
-        _fields_ = [
-            ("wVk", ctypes.c_ushort),
-            ("wScan", ctypes.c_ushort),
-            ("dwFlags", ctypes.c_ulong),
-            ("time", ctypes.c_ulong),
-            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
-        ]
-
-    class INPUT_UNION(ctypes.Union):
-        _fields_ = [("ki", KEYBDINPUT)]
-
-    class INPUT(ctypes.Structure):
-        _fields_ = [("type", ctypes.c_ulong), ("union", INPUT_UNION)]
 
     def __init__(self) -> None:
         if os.name != "nt":
@@ -230,8 +233,8 @@ class WindowsInput:
 
     def _send_keyboard(self, w_vk: int, w_scan: int, flags: int) -> None:
         extra = ctypes.c_ulong(0)
-        keyboard = self.KEYBDINPUT(w_vk, w_scan, flags, 0, ctypes.pointer(extra))
-        event = self.INPUT(self.INPUT_KEYBOARD, self.INPUT_UNION(ki=keyboard))
+        keyboard = KeybdInput(w_vk, w_scan, flags, 0, ctypes.pointer(extra))
+        event = InputEvent(self.INPUT_KEYBOARD, InputUnion(ki=keyboard))
         sent = ctypes.windll.user32.SendInput(1, ctypes.pointer(event), ctypes.sizeof(event))
         if sent != 1:
             raise ctypes.WinError()
