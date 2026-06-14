@@ -381,9 +381,11 @@ def blend_zone(previous: Zone, detected: Zone, alpha: float) -> Zone:
 
 
 class MotionDetector:
-    def __init__(self, min_motion_area: int, bg_alpha: float):
+    def __init__(self, min_motion_area: int, bg_alpha: float, motion_threshold: int = 35, arm_mode: str = "motion"):
         self.min_motion_area = min_motion_area
         self.bg_alpha = bg_alpha
+        self.motion_threshold = motion_threshold
+        self.arm_mode = arm_mode
         self.background: Optional[np.ndarray] = None
 
     def reset(self) -> None:
@@ -398,7 +400,15 @@ class MotionDetector:
 
         background_u8 = cv2.convertScaleAbs(self.background)
         diff = cv2.absdiff(gray, background_u8)
-        _, mask = cv2.threshold(diff, 35, 255, cv2.THRESH_BINARY)
+        _, motion_mask = cv2.threshold(diff, self.motion_threshold, 255, cv2.THRESH_BINARY)
+
+        if self.arm_mode == "skin":
+            mask = skin_mask(warped)
+        elif self.arm_mode == "combined":
+            mask = cv2.bitwise_or(motion_mask, skin_mask(warped))
+        else:
+            mask = motion_mask
+
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
         mask = cv2.dilate(mask, np.ones((13, 13), np.uint8), iterations=2)
 
@@ -420,6 +430,15 @@ class MotionDetector:
             return None, area, mask
         centroid = (moments["m10"] / moments["m00"], moments["m01"] / moments["m00"])
         return centroid, area, mask
+
+
+def skin_mask(frame: np.ndarray) -> np.ndarray:
+    ycrcb = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
+    lower = np.array((0, 133, 77), dtype=np.uint8)
+    upper = np.array((255, 173, 127), dtype=np.uint8)
+    mask = cv2.inRange(ycrcb, lower, upper)
+    mask = cv2.medianBlur(mask, 5)
+    return mask
 
 
 class EventTracker:
@@ -696,7 +715,7 @@ def run(args: argparse.Namespace) -> int:
         if calibration is None:
             calibration = collect_calibration(source, args.calibration)
 
-        detector = MotionDetector(args.min_motion_area, args.bg_alpha)
+        detector = MotionDetector(args.min_motion_area, args.bg_alpha, args.motion_threshold, args.arm_mode)
         color_tracker = ColorZoneTracker(args)
         tracker = EventTracker(args, output)
 
@@ -763,6 +782,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--deadzone", type=float, default=0.22, help="Center deadzone as a ratio of key size.")
     parser.add_argument("--key-inflate", type=float, default=0.45, help="How far outside a key still counts as that key.")
     parser.add_argument("--min-motion-area", type=int, default=1400, help="Minimum moving blob area in warped board pixels.")
+    parser.add_argument("--motion-threshold", type=int, default=35, help="Pixel difference threshold for motion detection.")
+    parser.add_argument("--arm-mode", choices=("motion", "skin", "combined"), default="motion", help="Motion mask source.")
     parser.add_argument("--cooldown", type=float, default=0.35, help="Seconds to ignore after an emitted input.")
     parser.add_argument("--settle", type=float, default=0.12, help="Seconds of no motion before classifying a punch.")
     parser.add_argument("--bg-alpha", type=float, default=0.015, help="Background adaptation speed.")
