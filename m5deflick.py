@@ -213,7 +213,9 @@ class WindowsInput:
     def _send_unicode_char(self, char: str) -> None:
         code_point = ord(char)
         if code_point > 0xFFFF:
-            for unit in char.encode("utf-16-le"):
+            encoded = char.encode("utf-16-le")
+            for index in range(0, len(encoded), 2):
+                unit = int.from_bytes(encoded[index : index + 2], "little")
                 self._send_scan(unit)
             return
         self._send_scan(code_point)
