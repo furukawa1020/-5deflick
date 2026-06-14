@@ -578,12 +578,16 @@ def discover_unitv2_url(host: str) -> Optional[str]:
         raise RuntimeError("requests is required to auto-discover UnitV2 streams. Run: pip install -r requirements.txt")
 
     bases = normalize_unitv2_bases(host)
+    for base in bases:
+        prepare_unitv2_camera_stream(base)
+
     candidates: list[str] = []
     for base in bases:
+        candidates.append(urljoin(base + "/", "video_feed"))
         candidates.extend(discover_urls_from_html(base))
         for path in (
-            "/video",
             "/video_feed",
+            "/video",
             "/stream",
             "/mjpeg",
             "/mjpg",
@@ -602,6 +606,18 @@ def discover_unitv2_url(host: str) -> Optional[str]:
         if looks_like_jpeg_stream(candidate):
             return candidate
     return None
+
+
+def prepare_unitv2_camera_stream(base: str) -> bool:
+    try:
+        response = requests.post(
+            urljoin(base + "/", "func"),
+            json={"type_id": "3", "type_name": "camera_stream", "args": ""},
+            timeout=(2, 8),
+        )
+    except Exception:
+        return False
+    return response.status_code < 400
 
 
 def normalize_unitv2_bases(host: str) -> list[str]:
