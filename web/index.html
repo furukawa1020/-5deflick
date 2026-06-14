@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M5Deflick</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>M5Deflick</h1>
+      <p id="status">starting</p>
+    </div>
+    <div class="top-actions">
+      <button id="recalibrate" type="button">4隅</button>
+      <button id="reset-bg" type="button">背景</button>
+      <label class="toggle">
+        <input id="send-unicode" type="checkbox">
+        <span>実入力</span>
+      </label>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="stage">
+      <div class="viewer primary">
+        <div class="viewer-head">
+          <strong>Camera</strong>
+          <span id="corner-state">0/4</span>
+        </div>
+        <img id="camera" src="/stream/camera" alt="camera stream">
+      </div>
+      <div class="viewer-grid">
+        <div class="viewer">
+          <div class="viewer-head">
+            <strong>Board</strong>
+            <span id="last-label"></span>
+          </div>
+          <img src="/stream/board" alt="board stream">
+        </div>
+        <div class="viewer">
+          <div class="viewer-head">
+            <strong>Arm Mask</strong>
+            <span id="mask-mode">combined</span>
+          </div>
+          <img src="/stream/mask" alt="motion mask">
+        </div>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <section class="output">
+        <div class="panel-head">
+          <strong>Output</strong>
+          <button id="clear-output" type="button">消去</button>
+        </div>
+        <textarea id="output" spellcheck="false"></textarea>
+      </section>
+
+      <section class="controls">
+        <div class="field">
+          <label for="arm-mode">腕</label>
+          <select id="arm-mode">
+            <option value="combined">動き+肌色</option>
+            <option value="motion">動き</option>
+            <option value="skin">肌色</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="direction-mode">方向</label>
+          <select id="direction-mode">
+            <option value="side">進入側</option>
+            <option value="motion">ベクトル</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="motion-threshold">感度</label>
+          <input id="motion-threshold" type="range" min="8" max="60" step="1">
+          <span id="motion-threshold-value"></span>
+        </div>
+        <div class="field">
+          <label for="min-motion-area">面積</label>
+          <input id="min-motion-area" type="range" min="120" max="4000" step="20">
+          <span id="min-motion-area-value"></span>
+        </div>
+        <div class="field">
+          <label for="deadzone">中央</label>
+          <input id="deadzone" type="range" min="0.05" max="0.45" step="0.01">
+          <span id="deadzone-value"></span>
+        </div>
+      </section>
+
+      <section class="events">
+        <strong>Recent</strong>
+        <div id="events"></div>
+      </section>
+    </aside>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
