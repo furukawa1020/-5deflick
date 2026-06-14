@@ -401,11 +401,13 @@ class MotionDetector:
         background_u8 = cv2.convertScaleAbs(self.background)
         diff = cv2.absdiff(gray, background_u8)
         _, motion_mask = cv2.threshold(diff, self.motion_threshold, 255, cv2.THRESH_BINARY)
+        _, weak_motion_mask = cv2.threshold(diff, max(5, self.motion_threshold // 2), 255, cv2.THRESH_BINARY)
 
         if self.arm_mode == "skin":
-            mask = skin_mask(warped)
+            mask = cv2.bitwise_and(skin_mask(warped), weak_motion_mask)
         elif self.arm_mode == "combined":
-            mask = cv2.bitwise_or(motion_mask, skin_mask(warped))
+            skin_motion_mask = cv2.bitwise_and(skin_mask(warped), weak_motion_mask)
+            mask = cv2.bitwise_or(motion_mask, skin_motion_mask)
         else:
             mask = motion_mask
 
