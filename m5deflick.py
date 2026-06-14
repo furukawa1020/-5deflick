@@ -515,12 +515,16 @@ def classify_direction(
     return "up" if dy < 0 else "down"
 
 
-def draw_overlay(warped: np.ndarray, centroid: Optional[tuple[float, float]], label: str) -> np.ndarray:
+def draw_overlay(warped: np.ndarray, centroid: Optional[tuple[float, float]], label: str, zones: list[Zone]) -> np.ndarray:
     canvas = warped.copy()
-    for zone in KANA_ZONES:
+    for zone in zones:
+        if zone.kind != "kana":
+            continue
         cv2.rectangle(canvas, (zone.x1, zone.y1), (zone.x2, zone.y2), (30, 210, 30), 3)
         cv2.circle(canvas, tuple(map(int, zone.center)), 5, (30, 210, 30), -1)
-    for zone in SPECIAL_ZONES:
+    for zone in zones:
+        if zone.kind != "key":
+            continue
         cv2.rectangle(canvas, (zone.x1, zone.y1), (zone.x2, zone.y2), (255, 120, 30), 3)
     if centroid is not None:
         cv2.circle(canvas, tuple(map(int, centroid)), 20, (0, 0, 255), 4)
