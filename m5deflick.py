@@ -4,7 +4,6 @@ import argparse
 import collections
 import ctypes
 import json
-import math
 import os
 import re
 import sys
@@ -176,12 +175,14 @@ class MjpegSource:
 
 
 class KeybdInput(ctypes.Structure):
+    ULONG_PTR = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
+
     _fields_ = [
         ("wVk", ctypes.c_ushort),
         ("wScan", ctypes.c_ushort),
         ("dwFlags", ctypes.c_ulong),
         ("time", ctypes.c_ulong),
-        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ("dwExtraInfo", ULONG_PTR),
     ]
 
 
@@ -232,10 +233,9 @@ class WindowsInput:
         self._send_keyboard(w_vk=vk, w_scan=0, flags=flags)
 
     def _send_keyboard(self, w_vk: int, w_scan: int, flags: int) -> None:
-        extra = ctypes.c_ulong(0)
-        keyboard = KeybdInput(w_vk, w_scan, flags, 0, ctypes.pointer(extra))
+        keyboard = KeybdInput(w_vk, w_scan, flags, 0, 0)
         event = InputEvent(self.INPUT_KEYBOARD, InputUnion(ki=keyboard))
-        sent = ctypes.windll.user32.SendInput(1, ctypes.pointer(event), ctypes.sizeof(event))
+        sent = ctypes.windll.user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(event))
         if sent != 1:
             raise ctypes.WinError()
 
