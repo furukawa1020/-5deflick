@@ -294,6 +294,87 @@ class Calibration:
         return cls([(float(x), float(y)) for x, y in points])
 
 
+class ColorZoneTracker:
+    def __init__(self, args: argparse.Namespace):
+        self.enabled = args.zone_mode == "color"
+        self.min_area = args.color_min_area
+        self.alpha = args.color_alpha
+        self.search_inflate = args.color_search_inflate
+        self.zones_by_name = {zone.name: zone for zone in ZONES}
+
+    @property
+    def zones(self) -> list[Zone]:
+        return [self.zones_by_name[zone.name] for zone in ZONES]
+
+    def reset(self) -> None:
+        self.zones_by_name = {zone.name: zone for zone in ZONES}
+
+    def update(self, warped: np.ndarray, allow_update: bool) -> list[Zone]:
+        if not self.enabled or not allow_update:
+            return self.zones
+
+        hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
+        for base_zone in KANA_ZONES:
+            detected = self._detect_colored_zone(hsv, base_zone)
+            if detected is None:
+                continue
+            previous = self.zones_by_name[base_zone.name]
+            self.zones_by_name[base_zone.name] = blend_zone(previous, detected, self.alpha)
+        return self.zones
+
+    def _detect_colored_zone(self, hsv: np.ndarray, base_zone: Zone) -> Optional[Zone]:
+        current_zone = self.zones_by_name[base_zone.name]
+        x1, y1, x2, y2 = inflated_bounds(current_zone, self.search_inflate)
+        roi = hsv[y1:y2, x1:x2]
+        if roi.size == 0:
+            return None
+
+        color_name = ZONE_COLORS[base_zone.name]
+        mask = np.zeros(roi.shape[:2], dtype=np.uint8)
+        for lower, upper in HSV_RANGES[color_name]:
+            mask |= cv2.inRange(roi, np.array(lower, dtype=np.uint8), np.array(upper, dtype=np.uint8))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((17, 17), np.uint8))
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+        contour = max(contours, key=cv2.contourArea)
+        area = cv2.contourArea(contour)
+        if area < self.min_area:
+            return None
+
+        x, y, w, h = cv2.boundingRect(contour)
+        if w < 35 or h < 35:
+            return None
+        return Zone(base_zone.name, base_zone.kind, x1 + x, y1 + y, x1 + x + w, y1 + y + h)
+
+
+def inflated_bounds(zone: Zone, inflate: float) -> tuple[int, int, int, int]:
+    margin_x = int(zone.width * inflate)
+    margin_y = int(zone.height * inflate)
+    return (
+        max(0, zone.x1 - margin_x),
+        max(0, zone.y1 - margin_y),
+        min(BOARD_SIZE, zone.x2 + margin_x),
+        min(BOARD_SIZE, zone.y2 + margin_y),
+    )
+
+
+def blend_zone(previous: Zone, detected: Zone, alpha: float) -> Zone:
+    def mix(old: int, new: int) -> int:
+        return int(round(old * (1.0 - alpha) + new * alpha))
+
+    return Zone(
+        previous.name,
+        previous.kind,
+        mix(previous.x1, detected.x1),
+        mix(previous.y1, detected.y1),
+        mix(previous.x2, detected.x2),
+        mix(previous.y2, detected.y2),
+    )
+
+
 class MotionDetector:
     def __init__(self, min_motion_area: int, bg_alpha: float):
         self.min_motion_area = min_motion_area
