@@ -6,9 +6,10 @@ M5UnitV2などのカメラで大きなクッション型かなフリック盤面
 
 1. カメラ映像でクッション画像の4隅をクリックしてキャリブレーションします。
 2. 盤面を正面向きの座標に変換します。
-3. 拳や手の動きを動体検出で拾います。
-4. 動きが入ったキーと、キー中心から見た進入側をフリック方向にします。
-5. `あ` の左側を殴ると `い`、上なら `う`、右なら `え`、下なら `お` になります。
+3. 色で各かなキーの現在位置を軽く追跡します。
+4. 拳や手の動きを動体検出で拾います。
+5. 動きが入ったキーと、キー中心から見た進入側をフリック方向にします。
+6. `あ` の左側を殴ると `い`、上なら `う`、右なら `え`、下なら `お` になります。
 
 ## セットアップ
 
@@ -63,6 +64,18 @@ python m5deflick.py --source unitv2 --min-motion-area 700 --deadzone 0.16
 
 ```powershell
 python m5deflick.py --source unitv2 --min-motion-area 2500 --cooldown 0.6
+```
+
+色が照明で拾いにくい場合:
+
+```powershell
+python m5deflick.py --source unitv2 --color-min-area 500 --color-search-inflate 0.65
+```
+
+色追跡を切って、固定レイアウトだけで見る場合:
+
+```powershell
+python m5deflick.py --source unitv2 --zone-mode layout
 ```
 
 方向を「入ってきた側」ではなく「動いたベクトル」で見たい場合:

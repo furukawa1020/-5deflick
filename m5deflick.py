@@ -737,6 +737,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--calibration", default=CALIBRATION_FILE, help="Calibration JSON path.")
     parser.add_argument("--recalibrate", action="store_true", help="Ignore saved calibration and click four corners again.")
     parser.add_argument("--output", choices=("print", "unicode", "none"), default="print", help="Output mode.")
+    parser.add_argument("--zone-mode", choices=("color", "layout"), default="color", help="Use color tracking or fixed layout zones.")
     parser.add_argument("--direction-mode", choices=("side", "motion"), default="side", help="How flick direction is classified.")
     parser.add_argument("--deadzone", type=float, default=0.22, help="Center deadzone as a ratio of key size.")
     parser.add_argument("--key-inflate", type=float, default=0.45, help="How far outside a key still counts as that key.")
@@ -744,6 +745,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--cooldown", type=float, default=0.35, help="Seconds to ignore after an emitted input.")
     parser.add_argument("--settle", type=float, default=0.12, help="Seconds of no motion before classifying a punch.")
     parser.add_argument("--bg-alpha", type=float, default=0.015, help="Background adaptation speed.")
+    parser.add_argument("--color-min-area", type=int, default=900, help="Minimum colored key area used by --zone-mode color.")
+    parser.add_argument("--color-alpha", type=float, default=0.25, help="Smoothing speed for color-tracked key rectangles.")
+    parser.add_argument("--color-search-inflate", type=float, default=0.45, help="Search margin around each expected key for color tracking.")
     return parser.parse_args(argv)
 
 
