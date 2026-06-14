@@ -21,6 +21,14 @@ pip install -r requirements.txt
 
 ## 起動
 
+ブラウザUIで使う場合:
+
+```powershell
+python m5deflick_web.py --source unitv2
+```
+
+起動したら `http://127.0.0.1:8787` を開きます。
+
 UnitV2をUSBでつないでいる場合は、まずこれを試します。
 
 ```powershell
@@ -46,6 +54,8 @@ python m5deflick.py --source unitv2 --output unicode
 ```
 
 ## 操作
+
+ブラウザUIでは、`4隅` ボタンでキャリブレーションを開始し、Camera映像上で左上、右上、右下、左下の順にクリックします。`Arm Mask` に腕や拳が白く出ていれば検出されています。
 
 - 起動直後に盤面の4隅を、左上、右上、右下、左下の順にクリックします。
 - `r`: キャリブレーションをやり直します。
