@@ -421,13 +421,15 @@ class EventTracker:
     def __init__(self, args: argparse.Namespace, output: Output):
         self.args = args
         self.output = output
+        self.zones = ZONES
         self.active = False
         self.points: list[tuple[float, tuple[float, float], float]] = []
         self.last_motion_at = 0.0
         self.last_emit_at = 0.0
         self.last_label = ""
 
-    def update(self, centroid: Optional[tuple[float, float]], area: float, now: float) -> str:
+    def update(self, centroid: Optional[tuple[float, float]], area: float, now: float, zones: list[Zone]) -> str:
+        self.zones = zones
         if centroid is not None:
             if not self.active and now - self.last_emit_at >= self.args.cooldown:
                 self.active = True
@@ -451,7 +453,7 @@ class EventTracker:
 
         candidates: list[tuple[Zone, float, tuple[float, float]]] = []
         for _, point, area in self.points:
-            zone = nearest_zone(point, inflate=self.args.key_inflate)
+            zone = nearest_zone(point, self.zones, inflate=self.args.key_inflate)
             if zone is not None:
                 candidates.append((zone, area, point))
 
@@ -477,8 +479,8 @@ def choose_zone(candidates: list[tuple[Zone, float, tuple[float, float]]]) -> Zo
     return zones_by_name[max(score, key=score.get)]
 
 
-def nearest_zone(point: tuple[float, float], inflate: float) -> Optional[Zone]:
-    hits = [zone for zone in ZONES if zone.contains(point, inflate=inflate)]
+def nearest_zone(point: tuple[float, float], zones: list[Zone], inflate: float) -> Optional[Zone]:
+    hits = [zone for zone in zones if zone.contains(point, inflate=inflate)]
     if not hits:
         return None
     px, py = point
