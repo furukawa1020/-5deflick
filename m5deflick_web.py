@@ -84,7 +84,7 @@ class WebOutput:
             self.state.events.appendleft({"kind": "text", "value": text, "at": time.time()})
             send_unicode = self.state.send_unicode
         if send_unicode:
-            self._windows().emit_text(text)
+            self.try_windows_input("text", text)
 
     def emit_key(self, key_name: str) -> None:
         with self.state.lock:
@@ -93,7 +93,19 @@ class WebOutput:
             self.state.events.appendleft({"kind": "key", "value": key_name, "at": time.time()})
             send_unicode = self.state.send_unicode
         if send_unicode:
-            self._windows().emit_key(key_name)
+            self.try_windows_input("key", key_name)
+
+    def try_windows_input(self, kind: str, value: str) -> None:
+        try:
+            if kind == "text":
+                self._windows().emit_text(value)
+            else:
+                self._windows().emit_key(value)
+        except Exception as exc:
+            with self.state.lock:
+                self.state.send_unicode = False
+                self.state.status = f"unicode input disabled: {exc}"
+                self.state.events.appendleft({"kind": "key", "value": "input-error", "at": time.time()})
 
     def _windows(self) -> core.WindowsInput:
         if self.windows_input is None:
