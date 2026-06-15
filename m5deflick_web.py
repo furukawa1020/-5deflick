@@ -57,10 +57,12 @@ class WebState:
         self.mask_jpeg: bytes | None = None
         self.reset_background_requested = False
         self.reset_zones_requested = False
+        self.pending_marker_sample: tuple[float, float] | None = None
+        self.marker_hsv: tuple[int, int, int] | None = None
         self.settings_version = 0
         self.send_unicode = False
         self.settings = {
-            "input_mode": "mediapipe",
+            "input_mode": "marker",
             "zone_mode": "color",
             "direction_mode": "side",
             "deadzone": 0.20,
@@ -77,6 +79,10 @@ class WebState:
             "color_search_inflate": 0.65,
             "hand_model_path": default_hand_model_path(),
             "hand_confidence": 0.35,
+            "marker_min_area": 180,
+            "marker_hue_margin": 14,
+            "marker_sat_margin": 70,
+            "marker_val_margin": 80,
         }
 
     def snapshot(self) -> dict[str, object]:
@@ -91,6 +97,7 @@ class WebState:
                 "outputText": self.output_text,
                 "events": list(self.events)[-24:],
                 "sendUnicode": self.send_unicode,
+                "markerReady": self.marker_hsv is not None,
                 "settings": dict(self.settings),
             }
 
@@ -182,6 +189,73 @@ def palm_y(landmarks) -> float:
     return sum(landmarks[index].y for index in (0, 5, 9, 13, 17)) / 5.0
 
 
+class MarkerDetector:
+    def __init__(self, settings: SimpleNamespace):
+        self.settings = settings
+        self.hsv: tuple[int, int, int] | None = None
+
+    def set_hsv(self, hsv: tuple[int, int, int] | None) -> None:
+        self.hsv = hsv
+
+    def sample_from_frame(self, frame: np.ndarray, point: tuple[float, float]) -> tuple[int, int, int]:
+        x = int(round(point[0]))
+        y = int(round(point[1]))
+        height, width = frame.shape[:2]
+        x1, x2 = max(0, x - 6), min(width, x + 7)
+        y1, y2 = max(0, y - 6), min(height, y + 7)
+        patch = frame[y1:y2, x1:x2]
+        if patch.size == 0:
+            raise ValueError("marker sample is outside the camera frame")
+        hsv_patch = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+        median = np.median(hsv_patch.reshape(-1, 3), axis=0)
+        self.hsv = (int(median[0]), int(median[1]), int(median[2]))
+        return self.hsv
+
+    def detect(self, warped: np.ndarray) -> tuple[tuple[float, float] | None, float, np.ndarray]:
+        mask = np.zeros(warped.shape[:2], dtype=np.uint8)
+        if self.hsv is None:
+            return None, 0.0, mask
+        hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
+        h, s, v = self.hsv
+        hue_margin = int(self.settings.marker_hue_margin)
+        sat_margin = int(self.settings.marker_sat_margin)
+        val_margin = int(self.settings.marker_val_margin)
+        lower_sv = (max(35, s - sat_margin), max(35, v - val_margin))
+        upper_sv = (255, min(255, v + val_margin))
+
+        ranges: list[tuple[int, int]] = []
+        low_h = h - hue_margin
+        high_h = h + hue_margin
+        if low_h < 0:
+            ranges.append((0, high_h))
+            ranges.append((180 + low_h, 179))
+        elif high_h > 179:
+            ranges.append((low_h, 179))
+            ranges.append((0, high_h - 180))
+        else:
+            ranges.append((low_h, high_h))
+
+        for hue_low, hue_high in ranges:
+            lower = np.array((hue_low, lower_sv[0], lower_sv[1]), dtype=np.uint8)
+            upper = np.array((hue_high, upper_sv[0], upper_sv[1]), dtype=np.uint8)
+            mask |= cv2.inRange(hsv, lower, upper)
+
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((17, 17), np.uint8))
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None, 0.0, mask
+        contour = max(contours, key=cv2.contourArea)
+        area = float(cv2.contourArea(contour))
+        if area < self.settings.marker_min_area:
+            return None, area, mask
+        moments = cv2.moments(contour)
+        if moments["m00"] == 0:
+            return None, area, mask
+        centroid = (moments["m10"] / moments["m00"], moments["m01"] / moments["m00"])
+        return centroid, area, mask
+
+
 class Processor:
     def __init__(self, state: WebState, args: argparse.Namespace):
         self.state = state
@@ -194,6 +268,7 @@ class Processor:
         self.color_tracker = None
         self.tracker = None
         self.hand_detector = None
+        self.marker_detector = None
         self.processing_args = None
 
     def start(self) -> None:
@@ -245,6 +320,9 @@ class Processor:
         )
         self.color_tracker = core.ColorZoneTracker(self.processing_args)
         self.tracker = core.EventTracker(self.processing_args, self.output)
+        self.marker_detector = MarkerDetector(self.processing_args)
+        with self.state.lock:
+            self.marker_detector.set_hsv(self.state.marker_hsv)
         if self.processing_args.input_mode == "mediapipe":
             self.hand_detector = MediaPipeHandDetector(
                 self.processing_args.hand_model_path,
@@ -280,13 +358,23 @@ class Processor:
             points = list(self.state.calibration_points)
             reset_background = self.state.reset_background_requested
             reset_zones = self.state.reset_zones_requested
+            pending_marker_sample = self.state.pending_marker_sample
+            marker_hsv = self.state.marker_hsv
             self.state.reset_background_requested = False
             self.state.reset_zones_requested = False
+            self.state.pending_marker_sample = None
 
         if reset_background:
             self.detector.reset()
         if reset_zones:
             self.color_tracker.reset()
+        if marker_hsv is not None:
+            self.marker_detector.set_hsv(marker_hsv)
+        if pending_marker_sample is not None:
+            sampled_hsv = self.marker_detector.sample_from_frame(frame, pending_marker_sample)
+            with self.state.lock:
+                self.state.marker_hsv = sampled_hsv
+                self.state.events.appendleft({"kind": "key", "value": "marker-set", "at": time.time()})
 
         camera_display = draw_camera_frame(frame, calibration, points, recalibrating)
         board_display = np.full((core.BOARD_SIZE, core.BOARD_SIZE, 3), 246, dtype=np.uint8)
@@ -298,7 +386,15 @@ class Processor:
             allow_bg_update = not self.tracker.active
             zones = self.color_tracker.update(warped, allow_bg_update)
 
-            if self.processing_args.input_mode == "mediapipe":
+            if self.processing_args.input_mode == "marker":
+                centroid, area, mask = self.marker_detector.detect(warped)
+                if centroid is not None:
+                    cv2.circle(mask, tuple(map(int, centroid)), 22, 255, 4)
+                if centroid is not None and core.nearest_zone(centroid, zones, inflate=self.processing_args.key_inflate) is None:
+                    centroid = None
+                label = self.tracker.update(centroid, area if centroid is not None else 0.0, time.monotonic(), zones)
+                self.set_status("running: marker" if self.marker_detector.hsv is not None else "running: sample marker")
+            elif self.processing_args.input_mode == "mediapipe":
                 hand_palm, hand_points = self.hand_detector.detect(frame)
                 draw_hand_points(camera_display, hand_points)
                 board_points = transform_points(hand_points, calibration.matrix)
@@ -438,6 +534,14 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json({"ok": True})
         elif path == "/api/calibration/click":
             self.add_calibration_point(payload)
+        elif path == "/api/marker/sample":
+            self.sample_marker(payload)
+        elif path == "/api/marker/clear":
+            with self.server.state.lock:
+                self.server.state.marker_hsv = None
+                self.server.state.pending_marker_sample = None
+                self.server.state.events.appendleft({"kind": "key", "value": "marker-clear", "at": time.time()})
+            self.send_json({"ok": True})
         elif path == "/api/background/reset":
             with self.server.state.lock:
                 self.server.state.reset_background_requested = True
@@ -477,6 +581,19 @@ class Handler(SimpleHTTPRequestHandler):
                 self.server.state.reset_zones_requested = True
         self.send_json({"ok": True})
 
+    def sample_marker(self, payload: dict[str, object]) -> None:
+        try:
+            x = float(payload["x"])
+            y = float(payload["y"])
+        except (KeyError, TypeError, ValueError):
+            self.send_error(400, "x and y are required")
+            return
+        with self.server.state.lock:
+            self.server.state.pending_marker_sample = (x, y)
+            self.server.state.settings["input_mode"] = "marker"
+            self.server.state.settings_version += 1
+        self.send_json({"ok": True})
+
     def update_settings(self, payload: dict[str, object]) -> None:
         allowed = {
             "input_mode": str,
@@ -492,6 +609,8 @@ class Handler(SimpleHTTPRequestHandler):
             "max_hold": float,
             "send_unicode": bool,
             "hand_confidence": float,
+            "marker_min_area": int,
+            "marker_hue_margin": int,
         }
         with self.server.state.lock:
             for key, caster in allowed.items():
