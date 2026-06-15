@@ -206,6 +206,7 @@ class Processor:
                 if self.source is None:
                     try:
                         self.set_status("connecting to UnitV2")
+                        self.prepare_source()
                         self.source = core.open_source(self.args)
                     except Exception as exc:
                         self.set_status(f"waiting for UnitV2: {exc}")
@@ -251,6 +252,12 @@ class Processor:
             )
         with self.state.lock:
             self.pipeline_version = self.state.settings_version
+
+    def prepare_source(self) -> None:
+        target = self.args.source_url or self.args.unitv2_host
+        parsed = urlparse(target if "://" in target else "http://" + target)
+        if parsed.hostname == "10.254.239.1":
+            core.prepare_unitv2_camera_stream("http://10.254.239.1")
 
     def get_settings(self) -> dict[str, object]:
         with self.state.lock:
