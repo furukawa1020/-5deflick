@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import tempfile
 import threading
 import time
 from collections import deque
@@ -20,6 +22,21 @@ import m5deflick as core
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
 os.environ.setdefault("MPLCONFIGDIR", str(ROOT / ".mplcache"))
+
+
+def default_hand_model_path() -> str:
+    source = ROOT / "models" / "hand_landmarker.task"
+    target_dir = Path(tempfile.gettempdir()) / "m5deflick"
+    target = target_dir / "hand_landmarker.task"
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        if source.exists() and (not target.exists() or source.stat().st_mtime > target.stat().st_mtime):
+            shutil.copyfile(source, target)
+        if target.exists():
+            return str(target)
+    except OSError:
+        pass
+    return str(source)
 
 
 class WebState:
@@ -58,7 +75,7 @@ class WebState:
             "color_min_area": 500,
             "color_alpha": 0.28,
             "color_search_inflate": 0.65,
-            "hand_model_path": str(ROOT / "models" / "hand_landmarker.task"),
+            "hand_model_path": default_hand_model_path(),
             "hand_confidence": 0.35,
         }
 
