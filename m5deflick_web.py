@@ -184,17 +184,28 @@ class Processor:
 
     def run(self) -> None:
         try:
-            self.source = core.open_source(self.args)
             self.rebuild_pipeline()
             while not self.stop_event.is_set():
-                ok, frame = self.source.read()
+                if self.source is None:
+                    try:
+                        self.source = core.open_source(self.args)
+                    except Exception as exc:
+                        self.set_status(f"waiting for UnitV2: {exc}")
+                        time.sleep(1.0)
+                        continue
+                try:
+                    ok, frame = self.source.read()
+                except Exception as exc:
+                    self.set_status(f"reconnecting: {exc}")
+                    self.source.release()
+                    self.source = None
+                    time.sleep(0.5)
+                    continue
                 if not ok or frame is None:
                     self.set_status("waiting for frame")
                     time.sleep(0.15)
                     continue
                 self.process_frame(frame)
-        except Exception as exc:
-            self.set_status(f"error: {exc}")
         finally:
             if self.hand_detector is not None:
                 self.hand_detector.close()
