@@ -2,6 +2,7 @@ const state = {
   settings: {},
   calibrated: false,
   recalibrating: false,
+  markerSampling: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -23,6 +24,7 @@ function setControlValues(settings, sendUnicode) {
     ["motion-threshold", settings.motion_threshold],
     ["min-motion-area", settings.min_motion_area],
     ["deadzone", settings.deadzone],
+    ["marker-min-area", settings.marker_min_area],
   ];
   for (const [id, value] of pairs) {
     const node = $(id);
@@ -32,7 +34,10 @@ function setControlValues(settings, sendUnicode) {
   $("motion-threshold-value").textContent = settings.motion_threshold;
   $("min-motion-area-value").textContent = settings.min_motion_area;
   $("deadzone-value").textContent = Number(settings.deadzone).toFixed(2);
-  $("mask-mode").textContent = settings.input_mode === "mediapipe" ? "landmarks" : settings.arm_mode;
+  $("marker-min-area-value").textContent = settings.marker_min_area;
+  $("mask-mode").textContent = settings.input_mode === "mediapipe" ? "landmarks" : (settings.input_mode === "marker" ? "marker" : settings.arm_mode);
+  $("sample-marker").classList.toggle("active", state.markerSampling);
+  $("sample-marker").textContent = state.markerSampling ? "クリック待ち" : "マーカー";
 }
 
 function renderEvents(events) {
@@ -78,18 +83,30 @@ function settingPayload() {
     motion_threshold: Number($("motion-threshold").value),
     min_motion_area: Number($("min-motion-area").value),
     deadzone: Number($("deadzone").value),
+    marker_min_area: Number($("marker-min-area").value),
     send_unicode: $("send-unicode").checked,
   };
 }
 
 function bind() {
   $("camera").addEventListener("click", async (event) => {
+    if (state.markerSampling) {
+      await postJSON("/api/marker/sample", scaledClick(event));
+      state.markerSampling = false;
+      await refreshState();
+      return;
+    }
     if (!state.recalibrating) return;
     await postJSON("/api/calibration/click", scaledClick(event));
     await refreshState();
   });
   $("recalibrate").addEventListener("click", async () => {
+    state.markerSampling = false;
     await postJSON("/api/calibration/reset");
+    await refreshState();
+  });
+  $("sample-marker").addEventListener("click", async () => {
+    state.markerSampling = true;
     await refreshState();
   });
   $("reset-bg").addEventListener("click", async () => {
@@ -104,7 +121,7 @@ function bind() {
     await postJSON("/api/output/test");
     await refreshState();
   });
-  for (const id of ["input-mode", "arm-mode", "direction-mode", "motion-threshold", "min-motion-area", "deadzone", "send-unicode"]) {
+  for (const id of ["input-mode", "arm-mode", "direction-mode", "motion-threshold", "min-motion-area", "deadzone", "marker-min-area", "send-unicode"]) {
     $(id).addEventListener("input", async () => {
       await postJSON("/api/settings", settingPayload());
       await refreshState();
