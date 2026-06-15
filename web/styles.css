@@ -72,6 +72,11 @@ button:hover,
   border-color: var(--blue);
 }
 
+button.active {
+  background: #fff2bd;
+  border-color: var(--yellow);
+}
+
 .toggle {
   display: inline-flex;
   align-items: center;
