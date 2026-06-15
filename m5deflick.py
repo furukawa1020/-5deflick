@@ -453,16 +453,25 @@ class EventTracker:
         self.last_motion_at = 0.0
         self.last_emit_at = 0.0
         self.last_label = ""
+        self.active_since = 0.0
 
     def update(self, centroid: Optional[tuple[float, float]], area: float, now: float, zones: list[Zone]) -> str:
         self.zones = zones
         if centroid is not None:
             if not self.active and now - self.last_emit_at >= self.args.cooldown:
                 self.active = True
+                self.active_since = now
                 self.points = []
             if self.active:
                 self.points.append((now, centroid, area))
                 self.last_motion_at = now
+                max_hold = getattr(self.args, "max_hold", 0.0)
+                if max_hold > 0 and now - self.active_since >= max_hold:
+                    label = self._classify_and_emit()
+                    self.active = False
+                    self.points = []
+                    self.last_emit_at = now
+                    self.last_label = label
             return self.last_label
 
         if self.active and now - self.last_motion_at >= self.args.settle:
@@ -788,6 +797,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--arm-mode", choices=("motion", "skin", "combined"), default="motion", help="Motion mask source.")
     parser.add_argument("--cooldown", type=float, default=0.35, help="Seconds to ignore after an emitted input.")
     parser.add_argument("--settle", type=float, default=0.12, help="Seconds of no motion before classifying a punch.")
+    parser.add_argument("--max-hold", type=float, default=0.0, help="Maximum active seconds before forcing classification. 0 disables it.")
     parser.add_argument("--bg-alpha", type=float, default=0.015, help="Background adaptation speed.")
     parser.add_argument("--color-min-area", type=int, default=900, help="Minimum colored key area used by --zone-mode color.")
     parser.add_argument("--color-alpha", type=float, default=0.25, help="Smoothing speed for color-tracked key rectangles.")

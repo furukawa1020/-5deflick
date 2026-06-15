@@ -17,6 +17,7 @@ async function postJSON(path, payload = {}) {
 
 function setControlValues(settings, sendUnicode) {
   const pairs = [
+    ["input-mode", settings.input_mode],
     ["arm-mode", settings.arm_mode],
     ["direction-mode", settings.direction_mode],
     ["motion-threshold", settings.motion_threshold],
@@ -31,7 +32,7 @@ function setControlValues(settings, sendUnicode) {
   $("motion-threshold-value").textContent = settings.motion_threshold;
   $("min-motion-area-value").textContent = settings.min_motion_area;
   $("deadzone-value").textContent = Number(settings.deadzone).toFixed(2);
-  $("mask-mode").textContent = settings.arm_mode;
+  $("mask-mode").textContent = settings.input_mode === "mediapipe" ? "landmarks" : settings.arm_mode;
 }
 
 function renderEvents(events) {
@@ -72,6 +73,7 @@ function scaledClick(event) {
 function settingPayload() {
   return {
     arm_mode: $("arm-mode").value,
+    input_mode: $("input-mode").value,
     direction_mode: $("direction-mode").value,
     motion_threshold: Number($("motion-threshold").value),
     min_motion_area: Number($("min-motion-area").value),
@@ -98,7 +100,7 @@ function bind() {
     await postJSON("/api/output/clear");
     await refreshState();
   });
-  for (const id of ["arm-mode", "direction-mode", "motion-threshold", "min-motion-area", "deadzone", "send-unicode"]) {
+  for (const id of ["input-mode", "arm-mode", "direction-mode", "motion-threshold", "min-motion-area", "deadzone", "send-unicode"]) {
     $(id).addEventListener("input", async () => {
       await postJSON("/api/settings", settingPayload());
       await refreshState();

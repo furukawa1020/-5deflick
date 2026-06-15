@@ -19,6 +19,7 @@ import m5deflick as core
 
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
+os.environ.setdefault("MPLCONFIGDIR", str(ROOT / ".mplcache"))
 
 
 class WebState:
@@ -42,6 +43,7 @@ class WebState:
         self.settings_version = 0
         self.send_unicode = False
         self.settings = {
+            "input_mode": "mediapipe",
             "zone_mode": "color",
             "direction_mode": "side",
             "deadzone": 0.20,
@@ -51,10 +53,13 @@ class WebState:
             "arm_mode": "combined",
             "cooldown": 0.32,
             "settle": 0.10,
+            "max_hold": 0.22,
             "bg_alpha": 0.006,
             "color_min_area": 500,
             "color_alpha": 0.28,
             "color_search_inflate": 0.65,
+            "hand_model_path": str(ROOT / "models" / "hand_landmarker.task"),
+            "hand_confidence": 0.35,
         }
 
     def snapshot(self) -> dict[str, object]:
@@ -113,6 +118,53 @@ class WebOutput:
         return self.windows_input
 
 
+class MediaPipeHandDetector:
+    def __init__(self, model_path: str, confidence: float):
+        import mediapipe as mp
+        from mediapipe.tasks.python import vision
+
+        if not os.path.exists(model_path):
+            raise RuntimeError(f"MediaPipe hand model not found: {model_path}")
+        self.mp = mp
+        self.vision = vision
+        base_options = mp.tasks.BaseOptions(model_asset_path=model_path)
+        options = vision.HandLandmarkerOptions(
+            base_options=base_options,
+            running_mode=vision.RunningMode.VIDEO,
+            num_hands=2,
+            min_hand_detection_confidence=confidence,
+            min_hand_presence_confidence=confidence,
+            min_tracking_confidence=0.35,
+        )
+        self.landmarker = vision.HandLandmarker.create_from_options(options)
+        self.started_at = time.monotonic()
+
+    def close(self) -> None:
+        self.landmarker.close()
+
+    def detect(self, frame: np.ndarray) -> tuple[tuple[float, float] | None, list[tuple[float, float]]]:
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = self.mp.Image(image_format=self.mp.ImageFormat.SRGB, data=rgb)
+        timestamp_ms = int((time.monotonic() - self.started_at) * 1000)
+        result = self.landmarker.detect_for_video(mp_image, timestamp_ms)
+        if not result.hand_landmarks:
+            return None, []
+
+        h, w = frame.shape[:2]
+        hand = min(result.hand_landmarks, key=lambda landmarks: palm_y(landmarks))
+        points = [(float(landmark.x * w), float(landmark.y * h)) for landmark in hand]
+        palm_indices = (0, 5, 9, 13, 17)
+        palm = (
+            sum(points[index][0] for index in palm_indices) / len(palm_indices),
+            sum(points[index][1] for index in palm_indices) / len(palm_indices),
+        )
+        return palm, points
+
+
+def palm_y(landmarks) -> float:
+    return sum(landmarks[index].y for index in (0, 5, 9, 13, 17)) / 5.0
+
+
 class Processor:
     def __init__(self, state: WebState, args: argparse.Namespace):
         self.state = state
@@ -124,6 +176,7 @@ class Processor:
         self.detector = None
         self.color_tracker = None
         self.tracker = None
+        self.hand_detector = None
         self.processing_args = None
 
     def start(self) -> None:
@@ -143,12 +196,17 @@ class Processor:
         except Exception as exc:
             self.set_status(f"error: {exc}")
         finally:
+            if self.hand_detector is not None:
+                self.hand_detector.close()
             if self.source is not None:
                 self.source.release()
 
     def rebuild_pipeline(self) -> None:
         settings = self.get_settings()
         self.processing_args = SimpleNamespace(**settings)
+        if self.hand_detector is not None:
+            self.hand_detector.close()
+            self.hand_detector = None
         self.detector = core.MotionDetector(
             self.processing_args.min_motion_area,
             self.processing_args.bg_alpha,
@@ -157,6 +215,11 @@ class Processor:
         )
         self.color_tracker = core.ColorZoneTracker(self.processing_args)
         self.tracker = core.EventTracker(self.processing_args, self.output)
+        if self.processing_args.input_mode == "mediapipe":
+            self.hand_detector = MediaPipeHandDetector(
+                self.processing_args.hand_model_path,
+                self.processing_args.hand_confidence,
+            )
         with self.state.lock:
             self.pipeline_version = self.state.settings_version
 
@@ -198,10 +261,22 @@ class Processor:
             warped = cv2.warpPerspective(frame, calibration.matrix, (core.BOARD_SIZE, core.BOARD_SIZE))
             allow_bg_update = not self.tracker.active
             zones = self.color_tracker.update(warped, allow_bg_update)
-            centroid, area, mask = self.detector.detect(warped, allow_bg_update)
-            label = self.tracker.update(centroid, area, time.monotonic(), zones)
+
+            if self.processing_args.input_mode == "mediapipe":
+                hand_palm, hand_points = self.hand_detector.detect(frame)
+                draw_hand_points(camera_display, hand_points)
+                board_points = transform_points(hand_points, calibration.matrix)
+                mask = draw_hand_mask(board_points)
+                centroid = transform_point(hand_palm, calibration.matrix) if hand_palm is not None else None
+                if centroid is not None and core.nearest_zone(centroid, zones, inflate=self.processing_args.key_inflate) is None:
+                    centroid = None
+                label = self.tracker.update(centroid, 4500.0 if centroid is not None else 0.0, time.monotonic(), zones)
+                self.set_status("running: hand" if hand_palm is not None else "running: no hand")
+            else:
+                centroid, area, mask = self.detector.detect(warped, allow_bg_update)
+                label = self.tracker.update(centroid, area, time.monotonic(), zones)
+                self.set_status("running")
             board_display = core.draw_overlay(warped, centroid, label, zones)
-            self.set_status("running")
         else:
             draw_pending_board(board_display, points)
             self.set_status("calibrating")
@@ -219,6 +294,51 @@ class Processor:
     def set_status(self, status: str) -> None:
         with self.state.lock:
             self.state.status = status
+
+
+HAND_EDGES = (
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (0, 5), (5, 6), (6, 7), (7, 8),
+    (0, 9), (9, 10), (10, 11), (11, 12),
+    (0, 13), (13, 14), (14, 15), (15, 16),
+    (0, 17), (17, 18), (18, 19), (19, 20),
+)
+
+
+def transform_point(point: tuple[float, float] | None, matrix: np.ndarray) -> tuple[float, float] | None:
+    if point is None:
+        return None
+    pts = np.array([[[point[0], point[1]]]], dtype=np.float32)
+    mapped = cv2.perspectiveTransform(pts, matrix)[0][0]
+    return (float(mapped[0]), float(mapped[1]))
+
+
+def transform_points(points: list[tuple[float, float]], matrix: np.ndarray) -> list[tuple[float, float]]:
+    if not points:
+        return []
+    pts = np.array([[points]], dtype=np.float32)
+    mapped = cv2.perspectiveTransform(pts, matrix)[0]
+    return [(float(point[0]), float(point[1])) for point in mapped]
+
+
+def draw_hand_points(display: np.ndarray, points: list[tuple[float, float]]) -> None:
+    if not points:
+        return
+    for start, end in HAND_EDGES:
+        cv2.line(display, tuple(map(int, points[start])), tuple(map(int, points[end])), (44, 190, 92), 2)
+    for point in points:
+        cv2.circle(display, tuple(map(int, point)), 4, (44, 190, 92), -1)
+
+
+def draw_hand_mask(points: list[tuple[float, float]]) -> np.ndarray:
+    mask = np.zeros((core.BOARD_SIZE, core.BOARD_SIZE), dtype=np.uint8)
+    if not points:
+        return mask
+    for start, end in HAND_EDGES:
+        cv2.line(mask, tuple(map(int, points[start])), tuple(map(int, points[end])), 255, 8)
+    for point in points:
+        cv2.circle(mask, tuple(map(int, point)), 10, 255, -1)
+    return cv2.dilate(mask, np.ones((13, 13), np.uint8), iterations=1)
 
 
 def draw_camera_frame(
@@ -321,6 +441,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def update_settings(self, payload: dict[str, object]) -> None:
         allowed = {
+            "input_mode": str,
             "zone_mode": str,
             "direction_mode": str,
             "deadzone": float,
@@ -330,7 +451,9 @@ class Handler(SimpleHTTPRequestHandler):
             "arm_mode": str,
             "cooldown": float,
             "settle": float,
+            "max_hold": float,
             "send_unicode": bool,
+            "hand_confidence": float,
         }
         with self.server.state.lock:
             for key, caster in allowed.items():
@@ -340,7 +463,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if key == "send_unicode":
                     self.server.state.send_unicode = bool(value)
                     continue
-                if key in ("zone_mode", "direction_mode", "arm_mode"):
+                if key in ("input_mode", "zone_mode", "direction_mode", "arm_mode"):
                     self.server.state.settings[key] = str(value)
                 else:
                     self.server.state.settings[key] = caster(value)

@@ -5,3 +5,5 @@ __pycache__/
 unitv2_*.js
 unitv2.html
 m5deflick_calibration.json
+.mplcache/
+models/*.task
