@@ -205,6 +205,7 @@ class Processor:
             while not self.stop_event.is_set():
                 if self.source is None:
                     try:
+                        self.set_status("connecting to UnitV2")
                         self.source = core.open_source(self.args)
                     except Exception as exc:
                         self.set_status(f"waiting for UnitV2: {exc}")
@@ -439,6 +440,8 @@ class Handler(SimpleHTTPRequestHandler):
                 self.server.state.output_text = ""
                 self.server.state.events.clear()
             self.send_json({"ok": True})
+        elif path == "/api/output/test":
+            self.test_output()
         elif path == "/api/settings":
             self.update_settings(payload)
         else:
@@ -497,6 +500,22 @@ class Handler(SimpleHTTPRequestHandler):
                     self.server.state.settings[key] = caster(value)
             self.server.state.settings_version += 1
             self.server.state.reset_background_requested = True
+        self.send_json({"ok": True})
+
+    def test_output(self) -> None:
+        value = "あ"
+        send_unicode = False
+        with self.server.state.lock:
+            self.server.state.output_text += value
+            self.server.state.events.appendleft({"kind": "text", "value": value, "at": time.time()})
+            send_unicode = self.server.state.send_unicode
+        if send_unicode:
+            try:
+                core.WindowsInput().emit_text(value)
+            except Exception as exc:
+                with self.server.state.lock:
+                    self.server.state.send_unicode = False
+                    self.server.state.status = f"unicode input disabled: {exc}"
         self.send_json({"ok": True})
 
     def stream_frames(self, name: str) -> None:

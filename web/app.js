@@ -100,6 +100,10 @@ function bind() {
     await postJSON("/api/output/clear");
     await refreshState();
   });
+  $("test-output").addEventListener("click", async () => {
+    await postJSON("/api/output/test");
+    await refreshState();
+  });
   for (const id of ["input-mode", "arm-mode", "direction-mode", "motion-threshold", "min-motion-area", "deadzone", "send-unicode"]) {
     $(id).addEventListener("input", async () => {
       await postJSON("/api/settings", settingPayload());
