@@ -186,5 +186,4 @@ function bind() {
 
 bind();
 refreshState();
-setInterval(refreshState, 250);
 setInterval(refreshState, 500);
