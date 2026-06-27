@@ -3,9 +3,41 @@ const state = {
   calibrated: false,
   recalibrating: false,
   markerSampling: false,
+  lastEventAt: 0,
+  initializedEvents: false,
 };
 
 const $ = (id) => document.getElementById(id);
+
+let audioContext = null;
+
+function unlockAudio() {
+  if (audioContext) return;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+  audioContext = new AudioContextClass();
+}
+
+function playTone(kind = "text") {
+  if (!$("sound-enabled").checked) return;
+  unlockAudio();
+  if (!audioContext) return;
+  if (audioContext.state === "suspended") audioContext.resume();
+
+  const now = audioContext.currentTime;
+  const oscillator = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  const frequency = kind === "text" ? 880 : kind === "key" ? 520 : 660;
+  oscillator.type = "sine";
+  oscillator.frequency.setValueAtTime(frequency, now);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.12, now + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.09);
+  oscillator.connect(gain);
+  gain.connect(audioContext.destination);
+  oscillator.start(now);
+  oscillator.stop(now + 0.1);
+}
 
 async function postJSON(path, payload = {}) {
   const response = await fetch(path, {
@@ -50,6 +82,21 @@ function renderEvents(events) {
   }));
 }
 
+function playNewEventSounds(events) {
+  const ordered = [...events].sort((a, b) => (a.at || 0) - (b.at || 0));
+  if (!state.initializedEvents) {
+    state.lastEventAt = ordered.length ? ordered[ordered.length - 1].at || 0 : 0;
+    state.initializedEvents = true;
+    return;
+  }
+  for (const event of ordered) {
+    if ((event.at || 0) <= state.lastEventAt) continue;
+    if (event.kind === "text") playTone("text");
+    else if (event.kind === "key") playTone("key");
+    state.lastEventAt = Math.max(state.lastEventAt, event.at || 0);
+  }
+}
+
 async function refreshState() {
   const response = await fetch("/api/state", { cache: "no-store" });
   const data = await response.json();
@@ -62,6 +109,7 @@ async function refreshState() {
   $("output").value = data.outputText || "";
   setControlValues(data.settings, data.sendUnicode);
   renderEvents(data.events || []);
+  playNewEventSounds(data.events || []);
 }
 
 function scaledClick(event) {
@@ -89,6 +137,7 @@ function settingPayload() {
 }
 
 function bind() {
+  document.addEventListener("pointerdown", unlockAudio, { once: true });
   $("camera").addEventListener("click", async (event) => {
     if (state.markerSampling) {
       await postJSON("/api/marker/sample", scaledClick(event));
