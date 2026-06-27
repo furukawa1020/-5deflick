@@ -67,7 +67,11 @@ function setControlValues(settings, sendUnicode) {
   $("min-motion-area-value").textContent = settings.min_motion_area;
   $("deadzone-value").textContent = Number(settings.deadzone).toFixed(2);
   $("marker-min-area-value").textContent = settings.marker_min_area;
-  $("mask-mode").textContent = settings.input_mode === "mediapipe" ? "landmarks" : (settings.input_mode === "marker" ? "marker" : settings.arm_mode);
+  $("mask-mode").textContent =
+    settings.input_mode === "mediapipe" ? "landmarks" :
+    settings.input_mode === "marker" ? "marker" :
+    settings.input_mode === "red_glove" ? "red glove" :
+    settings.arm_mode;
   $("sample-marker").classList.toggle("active", state.markerSampling);
   $("sample-marker").textContent = state.markerSampling ? "クリック待ち" : "マーカー";
 }
