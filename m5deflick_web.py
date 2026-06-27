@@ -213,11 +213,11 @@ class MarkerDetector:
         self.hsv = (int(median[0]), int(median[1]), int(median[2]))
         return self.hsv
 
-    def detect(self, warped: np.ndarray) -> tuple[tuple[float, float] | None, float, np.ndarray]:
-        mask = np.zeros(warped.shape[:2], dtype=np.uint8)
+    def detect(self, frame: np.ndarray) -> tuple[tuple[float, float] | None, float, np.ndarray]:
+        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
         if self.hsv is None:
             return None, 0.0, mask
-        hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         h, s, v = self.hsv
         hue_margin = int(self.settings.marker_hue_margin)
         sat_margin = int(self.settings.marker_sat_margin)
@@ -272,6 +272,7 @@ class Processor:
         self.hand_detector = None
         self.marker_detector = None
         self.processing_args = None
+        self.last_processed_at = 0.0
 
     def start(self) -> None:
         threading.Thread(target=self.run, name="m5deflick-processor", daemon=True).start()
@@ -301,6 +302,11 @@ class Processor:
                     self.set_status("waiting for frame")
                     time.sleep(0.15)
                     continue
+                now = time.monotonic()
+                target_interval = 1.0 / max(float(getattr(self.processing_args, "target_fps", 12)), 1.0)
+                if now - self.last_processed_at < target_interval:
+                    continue
+                self.last_processed_at = now
                 self.process_frame(frame)
         finally:
             if self.hand_detector is not None:
@@ -389,9 +395,11 @@ class Processor:
             zones = self.color_tracker.update(warped, allow_bg_update)
 
             if self.processing_args.input_mode == "marker":
-                centroid, area, mask = self.marker_detector.detect(warped)
-                if centroid is not None:
-                    cv2.circle(mask, tuple(map(int, centroid)), 22, 255, 4)
+                camera_centroid, area, mask = self.marker_detector.detect(frame)
+                if camera_centroid is not None:
+                    cv2.circle(camera_display, tuple(map(int, camera_centroid)), 18, (0, 0, 255), 4)
+                    cv2.circle(mask, tuple(map(int, camera_centroid)), 18, 255, 4)
+                centroid = transform_point(camera_centroid, calibration.matrix)
                 if centroid is not None and core.nearest_zone(centroid, zones, inflate=self.processing_args.key_inflate) is None:
                     centroid = None
                 label = self.tracker.update(centroid, area if centroid is not None else 0.0, time.monotonic(), zones)
@@ -415,9 +423,10 @@ class Processor:
             draw_pending_board(board_display, points)
             self.set_status("calibrating")
 
-        camera_jpeg = encode_jpeg(camera_display, 82)
-        board_jpeg = encode_jpeg(board_display, 82)
-        mask_jpeg = encode_jpeg(cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR), 80)
+        preview_width = int(getattr(self.processing_args, "preview_width", 640))
+        camera_jpeg = encode_jpeg(fit_preview(camera_display, preview_width), 72)
+        board_jpeg = encode_jpeg(fit_preview(board_display, preview_width), 72)
+        mask_jpeg = encode_jpeg(fit_preview(cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR), preview_width), 68)
         with self.state.frame_condition:
             self.state.camera_jpeg = camera_jpeg
             self.state.board_jpeg = board_jpeg
@@ -502,6 +511,14 @@ def encode_jpeg(frame: np.ndarray, quality: int) -> bytes:
     if not ok:
         return b""
     return buffer.tobytes()
+
+
+def fit_preview(frame: np.ndarray, width: int) -> np.ndarray:
+    height, current_width = frame.shape[:2]
+    if current_width <= width:
+        return frame
+    new_height = max(1, int(round(height * width / current_width)))
+    return cv2.resize(frame, (width, new_height), interpolation=cv2.INTER_AREA)
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -613,6 +630,8 @@ class Handler(SimpleHTTPRequestHandler):
             "hand_confidence": float,
             "marker_min_area": int,
             "marker_hue_margin": int,
+            "target_fps": int,
+            "preview_width": int,
         }
         with self.server.state.lock:
             for key, caster in allowed.items():
