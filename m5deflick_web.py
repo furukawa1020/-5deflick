@@ -62,7 +62,7 @@ class WebState:
         self.settings_version = 0
         self.send_unicode = False
         self.settings = {
-            "input_mode": "marker",
+            "input_mode": "red_glove",
             "zone_mode": "layout",
             "direction_mode": "side",
             "deadzone": 0.20,
@@ -83,8 +83,8 @@ class WebState:
             "marker_hue_margin": 14,
             "marker_sat_margin": 70,
             "marker_val_margin": 80,
-            "target_fps": 12,
-            "preview_width": 640,
+            "target_fps": 16,
+            "preview_width": 520,
         }
 
     def snapshot(self) -> dict[str, object]:
@@ -258,6 +258,108 @@ class MarkerDetector:
         return centroid, area, mask
 
 
+class RedGloveDetector:
+    def __init__(self, settings: SimpleNamespace):
+        self.settings = settings
+        self.open_kernel = np.ones((5, 5), np.uint8)
+        self.close_kernel = np.ones((19, 19), np.uint8)
+
+    def detect(self, frame: np.ndarray) -> tuple[tuple[float, float] | None, float, np.ndarray]:
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        lower_red = cv2.inRange(hsv, np.array((0, 70, 45), dtype=np.uint8), np.array((13, 255, 255), dtype=np.uint8))
+        upper_red = cv2.inRange(hsv, np.array((166, 70, 45), dtype=np.uint8), np.array((179, 255, 255), dtype=np.uint8))
+        mask = cv2.bitwise_or(lower_red, upper_red)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.open_kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.close_kernel)
+
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None, 0.0, mask
+        contour = max(contours, key=cv2.contourArea)
+        area = float(cv2.contourArea(contour))
+        if area < self.settings.marker_min_area:
+            return None, area, mask
+        moments = cv2.moments(contour)
+        if moments["m00"] == 0:
+            return None, area, mask
+        centroid = (moments["m10"] / moments["m00"], moments["m01"] / moments["m00"])
+        return centroid, area, mask
+
+
+class LatestFrameSource:
+    def __init__(
+        self,
+        args: argparse.Namespace,
+        prepare_source,
+        set_status,
+        stop_event: threading.Event,
+    ):
+        self.args = args
+        self.prepare_source = prepare_source
+        self.set_status = set_status
+        self.stop_event = stop_event
+        self.condition = threading.Condition()
+        self.source = None
+        self.frame: np.ndarray | None = None
+        self.sequence = 0
+        self.closed = False
+        self.thread = threading.Thread(target=self.run, name="m5deflick-frame-reader", daemon=True)
+        self.thread.start()
+
+    def run(self) -> None:
+        while not self.stop_event.is_set() and not self.closed:
+            if self.source is None:
+                try:
+                    self.set_status("connecting to UnitV2")
+                    self.prepare_source()
+                    self.source = core.open_source(self.args)
+                except Exception as exc:
+                    self.set_status(f"waiting for UnitV2: {exc}")
+                    self.stop_event.wait(1.0)
+                    continue
+            try:
+                ok, frame = self.source.read()
+            except Exception as exc:
+                self.set_status(f"reconnecting: {exc}")
+                self.release_source()
+                self.stop_event.wait(0.35)
+                continue
+            if not ok or frame is None:
+                self.set_status("waiting for frame")
+                self.stop_event.wait(0.03)
+                continue
+            with self.condition:
+                self.frame = frame
+                self.sequence += 1
+                self.condition.notify_all()
+
+    def read(self, last_sequence: int, timeout: float = 1.0) -> tuple[bool, np.ndarray | None, int]:
+        deadline = time.monotonic() + timeout
+        with self.condition:
+            while self.sequence == last_sequence and not self.stop_event.is_set() and not self.closed:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self.condition.wait(remaining)
+            if self.frame is None or self.sequence == last_sequence:
+                return False, None, last_sequence
+            return True, self.frame.copy(), self.sequence
+
+    def release_source(self) -> None:
+        if self.source is not None:
+            try:
+                self.source.release()
+            except Exception:
+                pass
+            self.source = None
+
+    def release(self) -> None:
+        self.closed = True
+        with self.condition:
+            self.condition.notify_all()
+        self.release_source()
+
+
 class Processor:
     def __init__(self, state: WebState, args: argparse.Namespace):
         self.state = state
@@ -271,6 +373,7 @@ class Processor:
         self.tracker = None
         self.hand_detector = None
         self.marker_detector = None
+        self.red_glove_detector = None
         self.processing_args = None
         self.last_processed_at = 0.0
 
@@ -280,27 +383,11 @@ class Processor:
     def run(self) -> None:
         try:
             self.rebuild_pipeline()
+            self.source = LatestFrameSource(self.args, self.prepare_source, self.set_status, self.stop_event)
+            last_sequence = 0
             while not self.stop_event.is_set():
-                if self.source is None:
-                    try:
-                        self.set_status("connecting to UnitV2")
-                        self.prepare_source()
-                        self.source = core.open_source(self.args)
-                    except Exception as exc:
-                        self.set_status(f"waiting for UnitV2: {exc}")
-                        time.sleep(1.0)
-                        continue
-                try:
-                    ok, frame = self.source.read()
-                except Exception as exc:
-                    self.set_status(f"reconnecting: {exc}")
-                    self.source.release()
-                    self.source = None
-                    time.sleep(0.5)
-                    continue
+                ok, frame, last_sequence = self.source.read(last_sequence)
                 if not ok or frame is None:
-                    self.set_status("waiting for frame")
-                    time.sleep(0.15)
                     continue
                 now = time.monotonic()
                 target_interval = 1.0 / max(float(getattr(self.processing_args, "target_fps", 12)), 1.0)
@@ -329,6 +416,7 @@ class Processor:
         self.color_tracker = core.ColorZoneTracker(self.processing_args)
         self.tracker = core.EventTracker(self.processing_args, self.output)
         self.marker_detector = MarkerDetector(self.processing_args)
+        self.red_glove_detector = RedGloveDetector(self.processing_args)
         with self.state.lock:
             self.marker_detector.set_hsv(self.state.marker_hsv)
         if self.processing_args.input_mode == "mediapipe":
@@ -394,7 +482,17 @@ class Processor:
             allow_bg_update = not self.tracker.active
             zones = self.color_tracker.update(warped, allow_bg_update)
 
-            if self.processing_args.input_mode == "marker":
+            if self.processing_args.input_mode == "red_glove":
+                camera_centroid, area, mask = self.red_glove_detector.detect(frame)
+                if camera_centroid is not None:
+                    cv2.circle(camera_display, tuple(map(int, camera_centroid)), 18, (0, 0, 255), 4)
+                    cv2.circle(mask, tuple(map(int, camera_centroid)), 18, 255, 4)
+                centroid = transform_point(camera_centroid, calibration.matrix)
+                if centroid is not None and core.nearest_zone(centroid, zones, inflate=self.processing_args.key_inflate) is None:
+                    centroid = None
+                label = self.tracker.update(centroid, area if centroid is not None else 0.0, time.monotonic(), zones)
+                self.set_status("running: red glove" if camera_centroid is not None else "running: no red glove")
+            elif self.processing_args.input_mode == "marker":
                 camera_centroid, area, mask = self.marker_detector.detect(frame)
                 if camera_centroid is not None:
                     cv2.circle(camera_display, tuple(map(int, camera_centroid)), 18, (0, 0, 255), 4)
@@ -689,7 +787,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode("ascii"))
                 self.wfile.write(frame)
                 self.wfile.write(b"\r\n")
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
                 break
 
     def serve_static(self, path: str) -> None:
