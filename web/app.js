@@ -98,8 +98,14 @@ function playNewEventSounds(events) {
 }
 
 async function refreshState() {
-  const response = await fetch("/api/state", { cache: "no-store" });
-  const data = await response.json();
+  let data;
+  try {
+    const response = await fetch("/api/state", { cache: "no-store" });
+    data = await response.json();
+  } catch (_error) {
+    $("status").textContent = "UI reconnecting";
+    return;
+  }
   state.settings = data.settings;
   state.calibrated = data.calibrated;
   state.recalibrating = data.recalibrating;
@@ -181,3 +187,4 @@ function bind() {
 bind();
 refreshState();
 setInterval(refreshState, 250);
+setInterval(refreshState, 500);
