@@ -532,16 +532,30 @@ def classify_direction(
     if not zone_points:
         zone_points = [point for _, point, _ in points]
 
+    cx, cy = zone.center
+    first = zone_points[0]
+    last = zone_points[-1]
+
     if mode == "motion" and len(zone_points) >= 2:
-        first = zone_points[0]
-        last = zone_points[-1]
         dx = (last[0] - first[0]) / max(zone.width, 1.0)
         dy = (last[1] - first[1]) / max(zone.height, 1.0)
     else:
-        cx, cy = zone.center
-        first = zone_points[0]
-        dx = (first[0] - cx) / max(zone.width * 0.5, 1.0)
-        dy = (first[1] - cy) / max(zone.height * 0.5, 1.0)
+        side_dx = (first[0] - cx) / max(zone.width * 0.5, 1.0)
+        side_dy = (first[1] - cy) / max(zone.height * 0.5, 1.0)
+        move_dx = (last[0] - first[0]) / max(zone.width, 1.0)
+        move_dy = (last[1] - first[1]) / max(zone.height, 1.0)
+
+        if abs(side_dx) >= deadzone or abs(side_dy) >= deadzone:
+            dx = side_dx
+            dy = side_dy
+        elif len(zone_points) >= 2 and (abs(move_dx) >= deadzone * 0.75 or abs(move_dy) >= deadzone * 0.75):
+            # Physical punches usually enter from a side and move toward the key.
+            # Use the opposite of the travel vector as the flick side.
+            dx = -move_dx
+            dy = -move_dy
+        else:
+            dx = side_dx
+            dy = side_dy
 
     if abs(dx) < deadzone and abs(dy) < deadzone:
         return "center"
