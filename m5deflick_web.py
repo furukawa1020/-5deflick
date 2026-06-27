@@ -63,7 +63,7 @@ class WebState:
         self.send_unicode = False
         self.settings = {
             "input_mode": "marker",
-            "zone_mode": "color",
+            "zone_mode": "layout",
             "direction_mode": "side",
             "deadzone": 0.20,
             "key_inflate": 0.50,
@@ -83,6 +83,8 @@ class WebState:
             "marker_hue_margin": 14,
             "marker_sat_margin": 70,
             "marker_val_margin": 80,
+            "target_fps": 12,
+            "preview_width": 640,
         }
 
     def snapshot(self) -> dict[str, object]:
