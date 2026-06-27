@@ -454,10 +454,13 @@ class EventTracker:
         self.last_emit_at = 0.0
         self.last_label = ""
         self.active_since = 0.0
+        self.waiting_for_release = False
 
     def update(self, centroid: Optional[tuple[float, float]], area: float, now: float, zones: list[Zone]) -> str:
         self.zones = zones
         if centroid is not None:
+            if self.waiting_for_release:
+                return self.last_label
             if not self.active and now - self.last_emit_at >= self.args.cooldown:
                 self.active = True
                 self.active_since = now
@@ -472,8 +475,11 @@ class EventTracker:
                     self.points = []
                     self.last_emit_at = now
                     self.last_label = label
+                    self.waiting_for_release = True
             return self.last_label
 
+        if self.waiting_for_release:
+            self.waiting_for_release = False
         if self.active and now - self.last_motion_at >= self.args.settle:
             label = self._classify_and_emit()
             self.active = False
