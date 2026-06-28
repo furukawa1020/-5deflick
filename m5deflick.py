@@ -136,7 +136,7 @@ class MjpegSource:
 
     def _connect(self) -> None:
         self.release()
-        self.response = requests.get(self.url, stream=True, timeout=(3, 8))
+        self.response = requests.get(self.url, stream=True, timeout=(3, 30))
         self.response.raise_for_status()
         self.iterator = self.response.iter_content(chunk_size=4096)
         self.buffer.clear()
